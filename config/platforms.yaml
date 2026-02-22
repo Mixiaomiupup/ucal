@@ -1,0 +1,23 @@
+# UCAL Platform Configuration
+# ============================
+# API keys can also be set via environment variables:
+#   X_BEARER_TOKEN, DISCORD_BOT_TOKEN
+
+browser:
+  headless: false
+  # session_dir: /custom/path/to/sessions  # defaults to config/sessions/
+
+platforms:
+  x: {}
+    # bearer_token: "YOUR_X_BEARER_TOKEN"
+
+  discord: {}
+    # bot_token: "YOUR_DISCORD_BOT_TOKEN"
+
+  xhs: {}
+    # No API — uses browser automation
+    # Session is auto-saved after manual login
+
+  zhihu: {}
+    # No API — uses browser automation
+    # Session is auto-saved after manual login
