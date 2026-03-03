@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
+import re
+from typing import Any
 
 from ucal.adapters.base import (
     AdapterType,
@@ -145,12 +148,27 @@ class XHSAdapter(BaseAdapter):
                 f"?keyword={query}&source=web_search_result_notes"
             )
             await page.goto(search_url, wait_until="domcontentloaded")
-            await random_delay(0.5, 1.0)
 
-            # Scroll to load more results
-            for _ in range(min(limit // 5, 3)):
+            # Wait for first card to appear
+            try:
+                await page.wait_for_selector("section.note-item", timeout=10_000)
+            except Exception:
+                logger.warning("No note cards appeared within timeout")
+                return results
+
+            await random_delay(0.3, 0.6)
+
+            # Scroll to load more results.  XHS uses a 2-column waterfall
+            # layout so we need enough scrolls to populate both columns.
+            prev_count = 0
+            for _ in range(max(limit // 3, 3)):
                 await human_scroll(page, direction="down", amount=800)
-                await random_delay(0.3, 0.8)
+                await random_delay(0.3, 0.6)
+                cards = await page.query_selector_all("section.note-item")
+                cur_count = len(cards)
+                if cur_count >= limit or cur_count == prev_count:
+                    break
+                prev_count = cur_count
 
             # Extract note cards
             cards = await page.query_selector_all("section.note-item")
@@ -161,18 +179,18 @@ class XHSAdapter(BaseAdapter):
                     title = await title_el.inner_text() if title_el else ""
                     title = title.strip()[:100]
 
-                    # Note URL — use cover link with xsec_token
-                    link_el = await card.query_selector(
-                        'a.cover[href*="/search_result/"]'
-                    )
+                    # Note URL — accept any cover link with a note ID
+                    link_el = await card.query_selector("a.cover")
                     link = ""
                     if link_el:
                         href = await link_el.get_attribute("href") or ""
-                        if href:
+                        if href and (
+                            "/explore/" in href
+                            or "/search_result/" in href
+                            or "/discovery/item/" in href
+                        ):
                             link = (
-                                href
-                                if href.startswith("http")
-                                else f"{XHS_BASE}{href}"
+                                href if href.startswith("http") else f"{XHS_BASE}{href}"
                             )
 
                     # Skip cards without a link (e.g. "大家都在搜" blocks)
@@ -208,15 +226,21 @@ class XHSAdapter(BaseAdapter):
 
         return results
 
-    async def read(self, url: str) -> ContentResult:
+    async def read(self, url: str, **kwargs: Any) -> ContentResult:
         """Read full content of an XHS post including comments.
 
         Args:
             url: XHS note URL.
+            **kwargs: Optional parameters:
+                comment_limit (int): Max top-level comments (default 10).
+                expand_replies (int): Times to click expand per thread
+                    (default 1, max 3).
 
         Returns:
             Post content in Markdown format with top comments.
         """
+        comment_limit: int = kwargs.get("comment_limit", 10)
+        expand_depth: int = kwargs.get("expand_replies", 1)
         page = await self._bm.new_page(self.platform_name)
         try:
             await page.goto(url, wait_until="domcontentloaded")
@@ -232,18 +256,32 @@ class XHSAdapter(BaseAdapter):
                     break
 
             # Extract title
-            title_el = await page.query_selector(
-                "#detail-title, .title, .note-title"
-            )
+            title_el = await page.query_selector("#detail-title, .title, .note-title")
             title = await title_el.inner_text() if title_el else ""
 
             # Extract body — use #detail-desc first (note detail page)
             body_el = await page.query_selector("#detail-desc")
             if not body_el:
-                body_el = await page.query_selector(
-                    ".note-text, .content, .desc"
-                )
+                body_el = await page.query_selector(".note-text, .content, .desc")
             body = await body_el.inner_text() if body_el else ""
+
+            # Extract tags from body text (regex) and DOM elements
+            raw_tags = re.findall(r"#([^\s#]+)", body)
+            # Strip BOM / zero-width chars and dedupe
+            _zw = "\ufeff\u200b"
+            tags: list[str] = list(
+                dict.fromkeys(t.strip(_zw) for t in raw_tags if t.strip(_zw))
+            )
+            try:
+                tag_els = await page.query_selector_all(
+                    '#detail-desc a[href*="keyword="], .tag-item'
+                )
+                for el in tag_els:
+                    t = (await el.inner_text()).strip().lstrip("#")
+                    if t and t not in tags:
+                        tags.append(t)
+            except Exception:
+                pass
 
             # Extract author — use .author-wrapper .name in note detail
             author_el = await page.query_selector(
@@ -253,9 +291,7 @@ class XHSAdapter(BaseAdapter):
 
             # Extract engagement metrics from bottom bar
             likes = await self._get_text(page, ".like-wrapper .count")
-            comment_count = await self._get_text(
-                page, ".comments-container .total"
-            )
+            comment_count = await self._get_text(page, ".comments-container .total")
             collects = await self._get_text(page, ".collect-wrapper .count")
 
             content_parts = [body]
@@ -272,24 +308,21 @@ class XHSAdapter(BaseAdapter):
             # Extract comments with sub-comments.
             # DOM: .parent-comment > .comment-item (main) + .reply-container
             #   reply-container has visible sub-comments and expand button.
+            hot_threads: list[dict[str, Any]] = []
             parent_comments = await page.query_selector_all(
                 ".comments-container .parent-comment"
             )
             if parent_comments:
                 content_parts.append("")
                 content_parts.append("## Top Comments")
-                for parent in parent_comments[:10]:
+                for parent in parent_comments[:comment_limit]:
                     # Main comment is the direct .comment-item child
-                    main = await parent.query_selector(
-                        ":scope > .comment-item"
-                    )
+                    main = await parent.query_selector(":scope > .comment-item")
                     if not main:
                         continue
                     name = await self._get_child_text(main, ".name")
                     text = await self._get_comment_content(main)
-                    date = await self._get_child_text(
-                        main, ".info .date, .info"
-                    )
+                    date = await self._get_child_text(main, ".info .date, .info")
                     if not (name and text):
                         continue
                     date_clean = date.split("\n")[0] if date else ""
@@ -299,38 +332,43 @@ class XHSAdapter(BaseAdapter):
                     )
 
                     # Click expand button to load sub-comments
-                    reply_container = await parent.query_selector(
-                        ".reply-container"
-                    )
+                    reply_container = await parent.query_selector(".reply-container")
+                    has_expand_btn = False
                     if reply_container:
-                        await self._expand_replies(reply_container)
+                        # Check for expand button before clicking
+                        pre_expand = await reply_container.query_selector(
+                            ".show-more span, .show-more"
+                        )
+                        has_expand_btn = pre_expand is not None
+                        await self._expand_replies(
+                            reply_container, max_clicks=expand_depth
+                        )
 
                     # Extract sub-comments from reply-container
                     sub_items = await parent.query_selector_all(
                         ".reply-container .comment-item"
                     )
                     for sub in sub_items:
-                        sub_name = await self._get_child_text(
-                            sub, ".name"
-                        )
+                        sub_name = await self._get_child_text(sub, ".name")
                         sub_text = await self._get_comment_content(sub)
-                        sub_date = await self._get_child_text(
-                            sub, ".info .date, .info"
-                        )
+                        sub_date = await self._get_child_text(sub, ".info .date, .info")
                         if sub_name and sub_text:
-                            sub_date_clean = (
-                                sub_date.split("\n")[0]
-                                if sub_date
-                                else ""
-                            )
+                            sub_date_clean = sub_date.split("\n")[0] if sub_date else ""
                             content_parts.append(
                                 f"  - **{sub_name}**: {sub_text}"
-                                + (
-                                    f" ({sub_date_clean})"
-                                    if sub_date_clean
-                                    else ""
-                                )
+                                + (f" ({sub_date_clean})" if sub_date_clean else "")
                             )
+
+                    # Track hot discussion threads
+                    if len(sub_items) >= 3 or has_expand_btn:
+                        hot_threads.append(
+                            {
+                                "author": name,
+                                "preview": text[:80],
+                                "sub_count": len(sub_items),
+                                "has_more": has_expand_btn,
+                            }
+                        )
 
                     # Note remaining folded replies
                     await self._note_folded_replies(
@@ -338,12 +376,20 @@ class XHSAdapter(BaseAdapter):
                         content_parts,
                     )
 
+            # Build extra metadata
+            extra: dict[str, Any] = {}
+            if tags:
+                extra["tags"] = tags
+            if hot_threads:
+                extra["hot_threads"] = hot_threads
+
             return ContentResult(
                 title=title.strip(),
                 content="\n".join(content_parts),
                 author=author.strip(),
                 url=url,
                 platform=self.platform_name,
+                extra=extra,
             )
         except Exception as exc:
             logger.error("XHS read failed for %s: %s", url, exc)
@@ -356,21 +402,33 @@ class XHSAdapter(BaseAdapter):
         finally:
             await page.close()
 
-    async def _expand_replies(self, container) -> None:  # noqa: ANN001
+    async def _expand_replies(
+        self,
+        container,
+        max_clicks: int = 1,  # noqa: ANN001
+    ) -> None:
         """Click the expand button in a reply container to load sub-comments.
 
-        Clicks once to load the first batch of replies. Avoids clicking
-        multiple times to limit requests and anti-crawl risk.
+        Args:
+            container: The reply container element.
+            max_clicks: Number of times to click expand (1-3). Each subsequent
+                click uses a progressively longer delay to mimic human behavior.
         """
-        try:
-            expand_btn = await container.query_selector(
-                ".show-more span, .show-more"
-            )
-            if expand_btn:
+        for click_num in range(max_clicks):
+            try:
+                expand_btn = await container.query_selector(
+                    ".show-more span, .show-more"
+                )
+                if not expand_btn:
+                    break
+                btn_text = (await expand_btn.inner_text()).strip()
+                if not btn_text:
+                    break
                 await expand_btn.click()
-                await asyncio.sleep(1.5)
-        except Exception:
-            pass
+                delay = 1.5 + (click_num * 0.5) + random.uniform(0, 0.5)
+                await asyncio.sleep(delay)
+            except Exception:
+                break
 
     async def _note_folded_replies(
         self,
@@ -379,9 +437,7 @@ class XHSAdapter(BaseAdapter):
     ) -> None:
         """Append a note about remaining folded replies if expand button exists."""
         try:
-            expand_btn = await container.query_selector(
-                ".show-more span, .show-more"
-            )
+            expand_btn = await container.query_selector(".show-more span, .show-more")
             if expand_btn:
                 text = (await expand_btn.inner_text()).strip()
                 if text:
@@ -401,9 +457,7 @@ class XHSAdapter(BaseAdapter):
         """Extract comment text and inline images as markdown."""
         text = await self._get_child_text(item, ".note-text")
         try:
-            images = await item.query_selector_all(
-                ".note-text img, .comment-img img"
-            )
+            images = await item.query_selector_all(".note-text img, .comment-img img")
             img_parts = []
             for img in images:
                 src = await img.get_attribute("src") or ""

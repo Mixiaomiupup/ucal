@@ -146,11 +146,13 @@ class BaseAdapter(abc.ABC):
         """
 
     @abc.abstractmethod
-    async def read(self, url: str) -> ContentResult:
+    async def read(self, url: str, **kwargs: Any) -> ContentResult:
         """Read full content from a URL.
 
         Args:
             url: The URL to read.
+            **kwargs: Platform-specific parameters (e.g. comment_limit,
+                expand_replies for XHS).
 
         Returns:
             Full content in Markdown format.

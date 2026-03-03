@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 import httpx
 
@@ -113,10 +114,7 @@ class TwitterAdapter(BaseAdapter):
             data = resp.json()
 
         # Build author lookup
-        users = {
-            u["id"]: u
-            for u in data.get("includes", {}).get("users", [])
-        }
+        users = {u["id"]: u for u in data.get("includes", {}).get("users", [])}
 
         results: list[SearchResult] = []
         for tweet in data.get("data", []):
@@ -135,7 +133,7 @@ class TwitterAdapter(BaseAdapter):
             )
         return results
 
-    async def read(self, url: str) -> ContentResult:
+    async def read(self, url: str, **kwargs: Any) -> ContentResult:
         """Read a single tweet by URL.
 
         Args:
@@ -170,10 +168,7 @@ class TwitterAdapter(BaseAdapter):
             )
 
         tweet = tweets[0]
-        users = {
-            u["id"]: u
-            for u in data.get("includes", {}).get("users", [])
-        }
+        users = {u["id"]: u for u in data.get("includes", {}).get("users", [])}
         user = users.get(tweet.get("author_id", ""), {})
         username = user.get("username", "unknown")
         name = user.get("name", "")

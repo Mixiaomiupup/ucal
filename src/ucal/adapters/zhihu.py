@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 from ucal.adapters.base import (
     AdapterType,
@@ -68,9 +69,7 @@ class ZhihuAdapter(BaseAdapter):
 
         page = await self._bm.new_page(self.platform_name)
         try:
-            await page.goto(
-                f"{ZHIHU_BASE}/signin", wait_until="domcontentloaded"
-            )
+            await page.goto(f"{ZHIHU_BASE}/signin", wait_until="domcontentloaded")
             await random_delay(0.5, 1.0)
 
             # Check if already logged in
@@ -141,9 +140,7 @@ class ZhihuAdapter(BaseAdapter):
                 await human_scroll(page, direction="down", amount=800)
                 await random_delay(0.3, 0.8)
 
-            cards = await page.query_selector_all(
-                ".SearchResult-Card, .List-item"
-            )
+            cards = await page.query_selector_all(".SearchResult-Card, .List-item")
             for card in cards[:limit]:
                 try:
                     title_el = await card.query_selector(
@@ -152,9 +149,7 @@ class ZhihuAdapter(BaseAdapter):
                     )
                     title = await title_el.inner_text() if title_el else ""
 
-                    link_el = await card.query_selector(
-                        "h2 a, .ContentItem-title a"
-                    )
+                    link_el = await card.query_selector("h2 a, .ContentItem-title a")
                     link = ""
                     if link_el:
                         link = await link_el.get_attribute("href") or ""
@@ -194,7 +189,7 @@ class ZhihuAdapter(BaseAdapter):
 
         return results
 
-    async def read(self, url: str) -> ContentResult:
+    async def read(self, url: str, **kwargs: Any) -> ContentResult:
         """Read full content from a Zhihu question/answer/article.
 
         Args:
@@ -252,9 +247,7 @@ class ZhihuAdapter(BaseAdapter):
                     break
 
             # Engagement metrics
-            upvotes = await self._get_text(
-                page, "button.VoteButton--up, .VoteButton"
-            )
+            upvotes = await self._get_text(page, "button.VoteButton--up, .VoteButton")
 
             content_parts = [body]
             if upvotes:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 
 from playwright.async_api import BrowserContext
@@ -80,11 +81,29 @@ class SessionManager:
             return None
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            logger.info("Session loaded for %s from %s", platform, path)
-            return data
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Failed to load session for %s: %s", platform, exc)
             return None
+
+        # Filter out expired cookies so the server can re-issue fresh
+        # short-lived anti-bot tokens (e.g. acw_tc, sec_poison_id).
+        cookies = data.get("cookies", [])
+        now = time.time()
+        before = len(cookies)
+        cookies = [
+            c for c in cookies
+            if c.get("expires", -1) < 0 or c["expires"] > now
+        ]
+        if len(cookies) < before:
+            logger.info(
+                "Dropped %d expired cookies for %s",
+                before - len(cookies),
+                platform,
+            )
+        data["cookies"] = cookies
+
+        logger.info("Session loaded for %s from %s", platform, path)
+        return data
 
     def delete_session(self, platform: str) -> bool:
         """Delete the saved session for a platform.

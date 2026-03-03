@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 import httpx
 
@@ -134,10 +135,7 @@ class DiscordAdapter(BaseAdapter):
             results.append(
                 SearchResult(
                     title=msg["content"][:80] if msg.get("content") else "(no text)",
-                    url=(
-                        f"https://discord.com/channels/"
-                        f"@me/{channel_id}/{msg['id']}"
-                    ),
+                    url=(f"https://discord.com/channels/@me/{channel_id}/{msg['id']}"),
                     summary=msg.get("content", ""),
                     author=author.get("username", ""),
                     platform=self.platform_name,
@@ -149,7 +147,7 @@ class DiscordAdapter(BaseAdapter):
 
         return results
 
-    async def read(self, url: str) -> ContentResult:
+    async def read(self, url: str, **kwargs: Any) -> ContentResult:
         """Read a single message by URL.
 
         Expected URL format:

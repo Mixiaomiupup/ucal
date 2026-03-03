@@ -74,8 +74,7 @@ async def app_lifespan(server: FastMCP):
 
     discord_cfg = config.get("platforms", {}).get("discord", {})
     adapters["discord"] = DiscordAdapter(
-        bot_token=discord_cfg.get("bot_token")
-        or os.environ.get("DISCORD_BOT_TOKEN"),
+        bot_token=discord_cfg.get("bot_token") or os.environ.get("DISCORD_BOT_TOKEN"),
     )
 
     # Browser adapters
@@ -114,9 +113,7 @@ def _get_adapter(ctx: Context, platform: str) -> BaseAdapter:
     adapter = adapters.get(platform)
     if adapter is None:
         supported = ", ".join(sorted(adapters.keys()))
-        raise ValueError(
-            f"Unknown platform '{platform}'. Supported: {supported}"
-        )
+        raise ValueError(f"Unknown platform '{platform}'. Supported: {supported}")
     return adapter
 
 
@@ -220,14 +217,30 @@ class ReadInput(BaseModel):
     platform: PlatformName = Field(
         ...,
         description=(
-            "Platform the URL belongs to: "
-            "'x', 'discord', 'xhs', 'zhihu', 'generic'"
+            "Platform the URL belongs to: 'x', 'discord', 'xhs', 'zhihu', 'generic'"
         ),
     )
     url: str = Field(
         ...,
         description="The URL to read content from",
         min_length=1,
+    )
+    comment_limit: int | None = Field(
+        default=None,
+        description=(
+            "Max top-level comments to extract. Default platform-specific "
+            "(10 for XHS). Higher for deep research."
+        ),
+        ge=1,
+        le=50,
+    )
+    expand_replies: int = Field(
+        default=1,
+        description=(
+            "Times to click 'expand replies' per thread. 1=default safe, 2=deep, 3=max."
+        ),
+        ge=0,
+        le=3,
     )
 
 
@@ -413,7 +426,12 @@ async def ucal_platform_read(params: ReadInput, ctx: Context) -> str:
             bm = _get_browser_manager(ctx)
             await bm.start()
 
-        result = await adapter.read(params.url)
+        kwargs: dict[str, Any] = {}
+        if params.comment_limit is not None:
+            kwargs["comment_limit"] = params.comment_limit
+        if params.expand_replies != 1:
+            kwargs["expand_replies"] = params.expand_replies
+        result = await adapter.read(params.url, **kwargs)
         return json.dumps(result.to_dict(), indent=2, ensure_ascii=False)
 
     except Exception as exc:
@@ -511,7 +529,9 @@ async def ucal_browser_action(params: BrowserActionInput, ctx: Context) -> str:
         # e.g. zhihu.com → use "zhihu" context (with zhihu cookies)
         detected = _detect_platform_from_url(params.url)
         if detected:
-            logger.info("browser_action: auto-detected platform '%s' from URL", detected)
+            logger.info(
+                "browser_action: auto-detected platform '%s' from URL", detected
+            )
 
         results = await generic.execute_actions(
             params.url, params.actions, platform=detected

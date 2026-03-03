@@ -77,7 +77,7 @@ class GenericAdapter(BaseAdapter):
             )
         ]
 
-    async def read(self, url: str) -> ContentResult:
+    async def read(self, url: str, **kwargs: Any) -> ContentResult:
         """Read content from any URL.
 
         Args:
@@ -226,7 +226,9 @@ class GenericAdapter(BaseAdapter):
                     elif action_type == "screenshot":
                         save_path = action.get("path", "")
                         if save_path:
-                            await page.screenshot(path=save_path, full_page=action.get("full_page", False))
+                            await page.screenshot(
+                                path=save_path, full_page=action.get("full_page", False)
+                            )
                             result["path"] = save_path
                             result["message"] = f"Screenshot saved to {save_path}"
                         else:
@@ -240,9 +242,7 @@ class GenericAdapter(BaseAdapter):
 
                     elif action_type == "extract_text":
                         el = await page.query_selector(action["selector"])
-                        result["text"] = (
-                            (await el.inner_text()).strip() if el else ""
-                        )
+                        result["text"] = (await el.inner_text()).strip() if el else ""
 
                     elif action_type == "wait":
                         await page.wait_for_selector(
