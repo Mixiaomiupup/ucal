@@ -48,10 +48,10 @@ Different content platforms have different access methods (API vs. browser), aut
 │          │          │          │          │               │
 │  ┌───────▼───┐ ┌────▼────┐ ┌──▼───┐ ┌───▼────┐ ┌─────┐ │
 │  │ Twitter   │ │ Discord │ │ XHS  │ │ Zhihu  │ │ Gen │ │
-│  │ (API)     │ │ (API)   │ │(Brw) │ │ (Brw)  │ │(Brw)│ │
-│  └───────────┘ └─────────┘ └──┬───┘ └───┬────┘ └──┬──┘ │
-│                                │         │         │     │
-│  ┌─────────────────────────────▼─────────▼─────────▼──┐  │
+│  │ (Brw)     │ │ (API)   │ │(Brw) │ │ (Brw)  │ │(Brw)│ │
+│  └──┬────────┘ └─────────┘ └──┬───┘ └───┬────┘ └──┬──┘ │
+│     │                          │         │         │     │
+│  ┌──▼──────────────────────────▼─────────▼─────────▼──┐  │
 │  │                Core Layer                           │  │
 │  │  BrowserManager / SessionManager / AntiDetect       │  │
 │  └─────────────────────────┬──────────────────────────┘  │
@@ -85,7 +85,7 @@ ucal/
 │   ├── server.py                # MCP server 入口, 5 个 tool 定义
 │   ├── adapters/                # 平台适配器
 │   │   ├── base.py              # BaseAdapter 抽象基类 + 数据模型
-│   │   ├── twitter.py           # X/Twitter (API adapter)
+│   │   ├── twitter.py           # X/Twitter (browser adapter)
 │   │   ├── discord_api.py       # Discord (API adapter)
 │   │   ├── xhs.py               # 小红书 (browser adapter)
 │   │   ├── zhihu.py             # 知乎 (browser adapter)
@@ -179,7 +179,7 @@ class BaseAdapter(abc.ABC):
 
 | 类型 | 平台 | 访问方式 | 认证方式 |
 |------|------|----------|----------|
-| **API** | X/Twitter | httpx HTTP 请求 | Bearer Token (环境变量) |
+| **Browser** | X/Twitter | Playwright 页面操作 | 手动登录 |
 | **API** | Discord | httpx HTTP 请求 | Bot Token (环境变量) |
 | **Browser** | 小红书 (xhs) | Playwright 页面操作 | 扫码登录 |
 | **Browser** | 知乎 (zhihu) | Playwright 页面操作 | 手动登录 |
@@ -189,6 +189,7 @@ class BaseAdapter(abc.ABC):
 - API 适配器更快、更稳定，但需要申请 API 权限，且平台可能限制 API 功能
 - Browser 适配器更通用，能访问任何页面内容，但需要处理反检测和登录态
 - 有些平台（如小红书）没有公开 API，只能走浏览器
+- X/Twitter 从 API 迁移到浏览器模式，支持关注列表抓取等需要登录态的功能
 
 ### 4.3 Data Models (adapters/base.py)
 
@@ -387,21 +388,43 @@ LLM 调用 ucal_platform_read(
   └─ 返回 JSON
 ```
 
+### 6.5 X/Twitter Read Flow
+
+```
+LLM 调用 ucal_platform_read(platform="x", url="https://x.com/user/following")
+  |
+  ├─ TwitterBrowserAdapter.read(url)
+  │    ├─ URL 路由:
+  │    │    ├─ /following → _read_following()
+  │    │    ├─ /status/   → _read_tweet()
+  │    │    └─ 其他       → _read_user_tweets()
+  │    ├─ 导航到目标页
+  │    ├─ 检测/关闭登录墙
+  │    ├─ 滚动加载更多内容 (human_scroll)
+  │    ├─ 去重 (seen_handles / seen_texts)
+  │    └─ 返回 ContentResult (Markdown)
+  │
+  └─ 返回 JSON
+```
+
 ---
 
 ## 7. Platform Capabilities Matrix
 
-| 能力 | X (API) | Discord (API) | XHS (Browser) | Zhihu (Browser) | Generic (Browser) |
-|------|:-------:|:-------------:|:-------------:|:---------------:|:-----------------:|
-| **Login** | API Key | Bot Token | QR 扫码 | 手动登录 | N/A |
+| 能力 | X (Browser) | Discord (API) | XHS (Browser) | Zhihu (Browser) | Generic (Browser) |
+|------|:-----------:|:-------------:|:-------------:|:---------------:|:-----------------:|
+| **Login** | 手动登录 | Bot Token | QR 扫码 | 手动登录 | N/A |
 | **Search** | Yes | Yes (channel_id:query) | Yes | Yes | No |
 | **Read** | Yes | Yes | Yes | Yes | Yes |
+| **Read: 用户推文** | Yes | N/A | N/A | N/A | N/A |
+| **Read: 单条推文** | Yes | N/A | N/A | N/A | N/A |
+| **Read: 关注列表** | Yes | N/A | N/A | N/A | N/A |
 | **Extract** | Yes | Yes | Yes | Yes | Yes |
 | **Comment Extraction** | N/A | N/A | Yes (含子评论) | No | N/A |
-| **browser_action** | N/A | N/A | Yes | Yes | Yes |
-| **Network Interception** | N/A | N/A | Yes | Yes | Yes |
-| **Session Persist** | N/A | N/A | Yes | Yes | N/A |
-| **Anti-Detection** | N/A | N/A | Full | Full | Basic |
+| **browser_action** | Yes | N/A | Yes | Yes | Yes |
+| **Network Interception** | Yes | N/A | Yes | Yes | Yes |
+| **Session Persist** | Yes | N/A | Yes | Yes | N/A |
+| **Anti-Detection** | Full | N/A | Full | Full | Basic |
 
 ### 7.1 XHS 评论提取能力
 
@@ -415,7 +438,24 @@ LLM 调用 ucal_platform_read(
 | 热门讨论标记 | 已支持 | `extra.hot_threads` 返回 |
 | 未展开回复提示 | 已支持 | 输出中标注折叠数 |
 
-### 7.2 Platform Content Characteristics
+### 7.2 X/Twitter 浏览器适配器
+
+X/Twitter 从 API 模式迁移到浏览器模式（`TwitterBrowserAdapter`），支持需要登录态的功能：
+
+| 能力 | 说明 | URL 模式 |
+|------|------|----------|
+| **用户推文** | 抓取用户主页最近推文 | `https://x.com/{username}` |
+| **单条推文** | 读取推文内容 + 回复 | `https://x.com/{user}/status/{id}` |
+| **关注列表** | 抓取用户关注的人 | `https://x.com/{username}/following` |
+| **搜索** | 关键词搜索推文 | 内部构建搜索 URL |
+
+**URL 路由**：`read()` 方法根据 URL 模式自动分发到对应处理器。
+
+**登录墙处理**：Twitter 未登录时会弹出登录对话框遮挡内容。适配器自动检测并尝试关闭登录墙（点击关闭按钮或按 Escape）。
+
+**选择器集中管理**：Twitter 频繁更改 DOM 结构，所有 CSS 选择器集中定义在 `_SELECTORS` 字典中，便于维护更新。
+
+### 7.3 Platform Content Characteristics
 
 不同平台的内容形态有本质差异，直接影响 adapter 的提取策略：
 
@@ -425,10 +465,10 @@ LLM 调用 ucal_platform_read(
 | **正文文字** | 少，通常是图片说明 | 多，完整长文 | 280字以内 |
 | **图片中的关键信息** | 大量（攻略、教程、菜单等） | 少（配图为辅） | 少 |
 | **评论区价值** | 高（补充信息、避坑提醒） | 中（讨论为主） | 中 |
-| **评论提取** | 已支持 | 未支持 | N/A |
+| **评论提取** | 已支持 | 未支持 | 回复提取 |
 | **OCR 需求** | 强烈 | 低 | 低 |
 
-### 7.3 当前限制与改进方向
+### 7.4 当前限制与改进方向
 
 | 能力 | 当前状态 | 改进方向 |
 |------|----------|----------|
@@ -450,17 +490,16 @@ browser:
   session_dir: config/sessions  # session 存储路径
 
 platforms:
-  x:
-    bearer_token: "..."         # 或使用环境变量 X_BEARER_TOKEN
   discord:
     bot_token: "..."            # 或使用环境变量 DISCORD_BOT_TOKEN
 ```
+
+X/Twitter 现在通过浏览器适配器访问，无需 API token。首次使用需通过 `ucal_platform_login(platform="x", method="browser")` 手动登录，session 自动保存并复用。
 
 ### 8.2 Environment Variables
 
 | 变量 | 用途 |
 |------|------|
-| `X_BEARER_TOKEN` | X/Twitter API Bearer Token |
 | `DISCORD_BOT_TOKEN` | Discord Bot Token |
 
 ### 8.3 MCP Registration

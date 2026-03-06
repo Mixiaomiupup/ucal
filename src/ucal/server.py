@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ucal.adapters.base import BaseAdapter, LoginMethod
 from ucal.adapters.discord_api import DiscordAdapter
 from ucal.adapters.generic import GenericAdapter
-from ucal.adapters.twitter import TwitterAdapter
+from ucal.adapters.twitter import TwitterBrowserAdapter
 from ucal.adapters.xhs import XHSAdapter
 from ucal.adapters.zhihu import ZhihuAdapter
 from ucal.core.browser import BrowserManager
@@ -66,11 +66,8 @@ async def app_lifespan(server: FastMCP):
     # Build adapters
     adapters: dict[str, BaseAdapter] = {}
 
-    # API adapters
-    x_cfg = config.get("platforms", {}).get("x", {})
-    adapters["x"] = TwitterAdapter(
-        bearer_token=x_cfg.get("bearer_token") or os.environ.get("X_BEARER_TOKEN"),
-    )
+    # Browser adapter for X/Twitter
+    adapters["x"] = TwitterBrowserAdapter(browser_mgr)
 
     discord_cfg = config.get("platforms", {}).get("discord", {})
     adapters["discord"] = DiscordAdapter(
@@ -334,7 +331,8 @@ async def ucal_platform_login(params: LoginInput, ctx: Context) -> str:
     try:
         # Start browser if needed for browser-based platforms
         adapter = _get_adapter(ctx, params.platform.value)
-        if params.platform.value in ("xhs", "zhihu") and params.method == "browser":
+        browser_platforms = ("x", "xhs", "zhihu")
+        if params.platform.value in browser_platforms and params.method == "browser":
             bm = _get_browser_manager(ctx)
             bm.headless = False  # Need visible browser for manual login
             await bm.start()

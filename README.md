@@ -1,27 +1,27 @@
 # UCAL — Universal Content Access Layer
 
-MCP Server for unified multi-platform content access. Designed for LLMs (Claude Code) to search, read, and extract structured data from platforms that require authentication and anti-detection.
+MCP Server，提供统一的多平台内容访问能力。专为 LLM（Claude Code）设计，支持搜索、阅读、提取需要登录和反检测的平台内容。
 
-## Why UCAL?
+## 为什么需要 UCAL？
 
-Generic web tools (Jina, Crawl4AI, Tavily) fail on platforms like XHS (Xiaohongshu) due to anti-bot measures. UCAL solves this with:
+通用 Web 工具（Jina、Crawl4AI、Tavily）在小红书等平台上会失败，因为这些平台有严格的反爬措施。UCAL 通过以下方式解决：
 
-- **Three-layer anti-detection**: Playwright stealth + fingerprint randomization + human behavior simulation
-- **Session persistence**: Login once (QR scan), reuse across server restarts
-- **Unified interface**: 5 MCP tools work across all platforms
-- **Network interception**: Capture underlying API responses for structured data
+- **三层反检测**：Playwright stealth + 指纹随机化 + 人类行为模拟
+- **Session 持久化**：登录一次（扫码/手动），跨服务重启复用
+- **统一接口**：5 个 MCP 工具覆盖所有平台
+- **网络拦截**：捕获底层 API 响应，获取结构化数据
 
-## Supported Platforms
+## 支持平台
 
-| Platform | Access | Auth | Search | Read | Comments |
-|----------|--------|------|:------:|:----:|:--------:|
-| **xhs** (Xiaohongshu) | Browser | QR scan | Yes | Yes | Yes |
-| **zhihu** (Zhihu) | Browser | Manual login | Yes | Yes | No |
-| **x** (X/Twitter) | API | Bearer Token | Yes | Yes | N/A |
+| 平台 | 访问方式 | 认证方式 | 搜索 | 阅读 | 评论 |
+|------|----------|----------|:----:|:----:|:----:|
+| **xhs**（小红书） | 浏览器 | 扫码登录 | Yes | Yes | Yes |
+| **zhihu**（知乎） | 浏览器 | 手动登录 | Yes | Yes | No |
+| **x**（X/Twitter） | 浏览器 | 手动登录 | Yes | Yes | N/A |
 | **discord** | API | Bot Token | Yes | Yes | N/A |
-| **generic** (any site) | Browser | None | No | Yes | N/A |
+| **generic**（任意网站） | 浏览器 | 无需登录 | No | Yes | N/A |
 
-## Installation
+## 安装
 
 ```bash
 git clone https://github.com/Mixiaomiupup/ucal.git
@@ -30,38 +30,45 @@ uv sync
 uv run playwright install chromium
 ```
 
-## Register with Claude Code
+## 注册到 Claude Code
 
 ```bash
 claude mcp add ucal -- uv run --directory /path/to/ucal ucal
 ```
 
-## MCP Tools
+## MCP 工具
 
-| Tool | Description |
-|------|-------------|
-| `ucal_platform_login` | Login to a platform (browser QR scan, cookie restore, or API key) |
-| `ucal_platform_search` | Search content on a platform |
-| `ucal_platform_read` | Read full content from a URL (returns Markdown) |
-| `ucal_platform_extract` | Extract structured fields from a URL (returns JSON) |
-| `ucal_browser_action` | Low-level browser automation with network interception |
+| 工具 | 说明 |
+|------|------|
+| `ucal_platform_login` | 登录平台（浏览器扫码/手动登录、cookie 恢复、API key） |
+| `ucal_platform_search` | 搜索平台内容 |
+| `ucal_platform_read` | 读取 URL 完整内容（返回 Markdown） |
+| `ucal_platform_extract` | 提取结构化字段（返回 JSON） |
+| `ucal_browser_action` | 低级浏览器自动化 + 网络拦截 |
 
-## Usage Examples
+## 使用示例
 
-### Login to XHS
+### 登录小红书
 
 ```
 ucal_platform_login(platform="xhs", method="browser")
-# Browser window opens → Scan QR code → Session saved automatically
+# 浏览器窗口打开 → 扫码 → Session 自动保存
 ```
 
-### Search
+### 登录 X/Twitter
+
+```
+ucal_platform_login(platform="x", method="browser")
+# 浏览器窗口打开 → 手动登录 → Session 自动保存
+```
+
+### 搜索
 
 ```
 ucal_platform_search(platform="xhs", query="减脂餐推荐", limit=10)
 ```
 
-### Read with comments
+### 阅读（含评论）
 
 ```
 ucal_platform_read(
@@ -72,9 +79,22 @@ ucal_platform_read(
 )
 ```
 
-### Browser action with network interception
+### 读取 X/Twitter 内容
 
-Capture the underlying API response when a page loads data via AJAX:
+```
+# 用户时间线
+ucal_platform_read(platform="x", url="https://x.com/elonmusk")
+
+# 单条推文 + 回复
+ucal_platform_read(platform="x", url="https://x.com/user/status/123456")
+
+# 关注列表
+ucal_platform_read(platform="x", url="https://x.com/user/following")
+```
+
+### 浏览器操作 + 网络拦截
+
+捕获页面通过 AJAX 加载的底层 API 响应：
 
 ```
 ucal_browser_action(
@@ -85,10 +105,10 @@ ucal_browser_action(
         {"type": "eval_js", "expression": "new Promise(r => setTimeout(r, 3000))"}
     ]
 )
-# Returns action results + captured API JSON with structured order data
+# 返回操作结果 + 捕获的 API JSON 数据
 ```
 
-### Execute JavaScript
+### 执行 JavaScript
 
 ```
 ucal_browser_action(
@@ -99,12 +119,11 @@ ucal_browser_action(
 )
 ```
 
-## Configuration
+## 配置
 
-API tokens via environment variables or `config/platforms.yaml`:
+API token 通过环境变量或 `config/platforms.yaml` 配置：
 
 ```bash
-export X_BEARER_TOKEN="your_token"
 export DISCORD_BOT_TOKEN="your_token"
 ```
 
@@ -113,38 +132,36 @@ export DISCORD_BOT_TOKEN="your_token"
 browser:
   headless: true
 platforms:
-  x:
-    bearer_token: "your_token"
   discord:
     bot_token: "your_token"
 ```
 
-## Architecture
+## 架构
 
 ```
-Claude Code ──MCP──▶ FastMCP Server (server.py)
-                        │
+Claude Code ──MCP──> FastMCP Server (server.py)
+                        |
                   Adapter Router
                   ┌─────┼─────┐
-               API│  Browser  │
-            ┌─────┤  Adapters ├─────┐
-            │     │           │     │
-         Twitter Discord  XHS Zhihu Generic
-                          │     │     │
-                     ┌────▼─────▼─────▼────┐
-                     │    Core Layer        │
-                     │  BrowserManager      │
-                     │  SessionManager      │
-                     │  AntiDetect          │
-                     │  HumanBehavior       │
-                     └─────────┬───────────┘
-                               │
-                        Playwright + Chromium
+               API|  Browser  |
+            ┌─────┤  Adapters ├─────┬─────┐
+            |     |           |     |     |
+         Discord  X/Twitter  XHS  Zhihu Generic
+                     |        |     |     |
+                ┌────▼────────▼─────▼─────▼────┐
+                |         Core Layer            |
+                |  BrowserManager               |
+                |  SessionManager               |
+                |  AntiDetect                    |
+                |  HumanBehavior                 |
+                └─────────────┬────────────────┘
+                              |
+                       Playwright + Chromium
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed design documentation.
+详细架构文档见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
-## Testing
+## 测试
 
 ```bash
 uv run pytest tests/ -v
