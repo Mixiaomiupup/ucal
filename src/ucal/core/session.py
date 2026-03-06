@@ -90,10 +90,7 @@ class SessionManager:
         cookies = data.get("cookies", [])
         now = time.time()
         before = len(cookies)
-        cookies = [
-            c for c in cookies
-            if c.get("expires", -1) < 0 or c["expires"] > now
-        ]
+        cookies = [c for c in cookies if c.get("expires", -1) < 0 or c["expires"] > now]
         if len(cookies) < before:
             logger.info(
                 "Dropped %d expired cookies for %s",

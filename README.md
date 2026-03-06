@@ -1,93 +1,155 @@
 # UCAL — Universal Content Access Layer
 
-MCP Server for unified multi-platform content access.
+MCP Server for unified multi-platform content access. Designed for LLMs (Claude Code) to search, read, and extract structured data from platforms that require authentication and anti-detection.
 
-## Features
+## Why UCAL?
 
-- **API Platforms**: X/Twitter, Discord (via official APIs)
-- **Browser Platforms**: 小红书 (XHS), 知乎 (Zhihu), Generic websites
-- **Anti-Detection**: Playwright + stealth + human behavior simulation
-- **Session Persistence**: Login once, reuse sessions across restarts
+Generic web tools (Jina, Crawl4AI, Tavily) fail on platforms like XHS (Xiaohongshu) due to anti-bot measures. UCAL solves this with:
+
+- **Three-layer anti-detection**: Playwright stealth + fingerprint randomization + human behavior simulation
+- **Session persistence**: Login once (QR scan), reuse across server restarts
+- **Unified interface**: 5 MCP tools work across all platforms
+- **Network interception**: Capture underlying API responses for structured data
+
+## Supported Platforms
+
+| Platform | Access | Auth | Search | Read | Comments |
+|----------|--------|------|:------:|:----:|:--------:|
+| **xhs** (Xiaohongshu) | Browser | QR scan | Yes | Yes | Yes |
+| **zhihu** (Zhihu) | Browser | Manual login | Yes | Yes | No |
+| **x** (X/Twitter) | API | Bearer Token | Yes | Yes | N/A |
+| **discord** | API | Bot Token | Yes | Yes | N/A |
+| **generic** (any site) | Browser | None | No | Yes | N/A |
 
 ## Installation
 
 ```bash
-# Install dependencies
-cd /Users/mixiaomiupup/projects/ucal
+git clone https://github.com/Mixiaomiupup/ucal.git
+cd ucal
 uv sync
-
-# Install Playwright browsers
 uv run playwright install chromium
 ```
 
-## Registration with Claude Code
+## Register with Claude Code
 
 ```bash
-claude mcp add ucal -- uv run --directory /Users/mixiaomiupup/projects/ucal ucal
+claude mcp add ucal -- uv run --directory /path/to/ucal ucal
 ```
 
-## Tools
+## MCP Tools
 
 | Tool | Description |
 |------|-------------|
 | `ucal_platform_login` | Login to a platform (browser QR scan, cookie restore, or API key) |
 | `ucal_platform_search` | Search content on a platform |
 | `ucal_platform_read` | Read full content from a URL (returns Markdown) |
-| `ucal_platform_extract` | Extract structured fields (returns JSON) |
-| `ucal_browser_action` | Low-level browser automation (click, type, scroll, screenshot) |
+| `ucal_platform_extract` | Extract structured fields from a URL (returns JSON) |
+| `ucal_browser_action` | Low-level browser automation with network interception |
 
-## Supported Platforms
+## Usage Examples
 
-- `x` — X/Twitter (requires `X_BEARER_TOKEN` env var)
-- `discord` — Discord (requires `DISCORD_BOT_TOKEN` env var)
-- `xhs` — 小红书 (browser-based, needs manual QR login)
-- `zhihu` — 知乎 (browser-based, needs manual login)
-- `generic` — Any website (browser-based, no login)
+### Login to XHS
 
-## Example Usage
-
-### Login to XHS (小红书)
-
-```python
+```
 ucal_platform_login(platform="xhs", method="browser")
-# Browser window opens → Scan QR code → Session saved
+# Browser window opens → Scan QR code → Session saved automatically
 ```
 
-### Search XHS
+### Search
 
-```python
-ucal_platform_search(platform="xhs", query="减脂餐", limit=10)
-# Returns list of notes with titles, URLs, authors
+```
+ucal_platform_search(platform="xhs", query="减脂餐推荐", limit=10)
 ```
 
-### Read XHS Note
+### Read with comments
 
-```python
-ucal_platform_read(platform="xhs", url="https://www.xiaohongshu.com/explore/...")
-# Returns full content in Markdown format
+```
+ucal_platform_read(
+    platform="xhs",
+    url="https://www.xiaohongshu.com/explore/...",
+    comment_limit=20,
+    expand_replies=2
+)
+```
+
+### Browser action with network interception
+
+Capture the underlying API response when a page loads data via AJAX:
+
+```
+ucal_browser_action(
+    url="https://buff.163.com/goods/968165",
+    network_intercept_patterns=["api/market/goods/buy_order"],
+    actions=[
+        {"type": "click", "selector": "#tab_container li.buying a"},
+        {"type": "eval_js", "expression": "new Promise(r => setTimeout(r, 3000))"}
+    ]
+)
+# Returns action results + captured API JSON with structured order data
+```
+
+### Execute JavaScript
+
+```
+ucal_browser_action(
+    url="https://example.com",
+    actions=[
+        {"type": "eval_js", "expression": "document.querySelectorAll('.item').length"}
+    ]
+)
 ```
 
 ## Configuration
 
-Edit `config/platforms.yaml` to add API tokens (optional, can use env vars):
+API tokens via environment variables or `config/platforms.yaml`:
+
+```bash
+export X_BEARER_TOKEN="your_token"
+export DISCORD_BOT_TOKEN="your_token"
+```
 
 ```yaml
+# config/platforms.yaml
+browser:
+  headless: true
 platforms:
   x:
-    bearer_token: "YOUR_X_BEARER_TOKEN"
+    bearer_token: "your_token"
   discord:
-    bot_token: "YOUR_DISCORD_BOT_TOKEN"
+    bot_token: "your_token"
 ```
 
 ## Architecture
 
-- **Browser Engine**: Playwright + playwright-stealth
-- **Anti-Detection**: Random viewport, UA rotation, human behavior simulation (from csfilter)
-- **Session Manager**: Saves cookies/storage_state to `config/sessions/`
-- **Adapters**: Pluggable platform implementations (API vs Browser)
+```
+Claude Code ──MCP──▶ FastMCP Server (server.py)
+                        │
+                  Adapter Router
+                  ┌─────┼─────┐
+               API│  Browser  │
+            ┌─────┤  Adapters ├─────┐
+            │     │           │     │
+         Twitter Discord  XHS Zhihu Generic
+                          │     │     │
+                     ┌────▼─────▼─────▼────┐
+                     │    Core Layer        │
+                     │  BrowserManager      │
+                     │  SessionManager      │
+                     │  AntiDetect          │
+                     │  HumanBehavior       │
+                     └─────────┬───────────┘
+                               │
+                        Playwright + Chromium
+```
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed design documentation.
 
 ## Testing
 
 ```bash
 uv run pytest tests/ -v
 ```
+
+## License
+
+MIT

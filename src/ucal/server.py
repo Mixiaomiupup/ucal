@@ -286,8 +286,18 @@ class BrowserActionInput(BaseModel):
             "List of browser actions. Each action is a dict with 'type' and "
             "type-specific params. Supported types: "
             "'goto' (url), 'click' (selector), 'type' (selector, text), "
-            "'scroll' (direction, amount), 'screenshot', "
+            "'scroll' (direction, amount, selector?), 'screenshot', "
             "'extract_text' (selector), 'wait' (selector, timeout)"
+        ),
+    )
+    network_intercept_patterns: list[str] = Field(
+        default_factory=list,
+        description=(
+            "URL substring patterns to intercept network responses. "
+            "When set, matching XHR/fetch responses are captured and "
+            "returned as a 'network_intercept' entry in the results. "
+            "Example: ['api/market/goods', 'api/user'] "
+            "will capture all responses whose URL contains those substrings."
         ),
     )
 
@@ -504,10 +514,15 @@ async def ucal_browser_action(params: BrowserActionInput, ctx: Context) -> str:
     - goto: {"type": "goto", "url": "https://..."}
     - click: {"type": "click", "selector": "button.submit"}
     - type: {"type": "type", "selector": "input.search", "text": "query"}
-    - scroll: {"type": "scroll", "direction": "down", "amount": 500}
+    - scroll: {"type": "scroll", "direction": "down", "amount": 500,
+              "selector": ".content-area"}
     - screenshot: {"type": "screenshot"}
     - extract_text: {"type": "extract_text", "selector": ".content"}
     - wait: {"type": "wait", "selector": ".loaded", "timeout": 10000}
+
+    Network interception: Set ``network_intercept_patterns`` to capture
+    XHR/fetch responses whose URL contains the given substrings.
+    Captured responses are appended as a ``network_intercept`` entry.
 
     Args:
         params: URL and action sequence.
@@ -534,7 +549,10 @@ async def ucal_browser_action(params: BrowserActionInput, ctx: Context) -> str:
             )
 
         results = await generic.execute_actions(
-            params.url, params.actions, platform=detected
+            params.url,
+            params.actions,
+            platform=detected,
+            network_intercept_patterns=params.network_intercept_patterns,
         )
         return json.dumps(results, indent=2, ensure_ascii=False)
 

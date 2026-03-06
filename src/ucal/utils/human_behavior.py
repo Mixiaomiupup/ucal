@@ -82,14 +82,24 @@ async def human_scroll(
     direction: str = "down",
     amount: int = 500,
     steps: int = 0,
+    selector: str | None = None,
 ) -> None:
     """Scroll the page with human-like behavior.
+
+    When *selector* is provided, ``element.scrollBy()`` is used to scroll
+    the target container directly.  This avoids two pitfalls of
+    ``mouse.wheel()``: (1) the element's visual centre may be occluded by
+    an overlapping panel, sending the event to the wrong container, and
+    (2) some containers ignore synthetic wheel events entirely.
 
     Args:
         page: Playwright page.
         direction: "down" or "up".
         amount: Total pixels to scroll.
         steps: Number of discrete scroll events. 0 = auto-calculate.
+        selector: Optional CSS selector of the scrollable container.
+            When given, ``element.scrollBy()`` is called on that element
+            instead of dispatching ``mouse.wheel()`` events.
     """
     if steps <= 0:
         steps = max(3, amount // random.randint(80, 150))
@@ -97,13 +107,30 @@ async def human_scroll(
     delta_sign = 1 if direction == "down" else -1
     remaining = amount
 
-    for i in range(steps):
-        if remaining <= 0:
-            break
-        chunk = min(remaining, random.randint(60, 160))
-        remaining -= chunk
-        await page.mouse.wheel(0, chunk * delta_sign)
-        await asyncio.sleep(random.uniform(0.02, 0.12))
+    if selector:
+        # Use element.scrollBy() for reliable container scrolling.
+        # mouse.wheel() is unreliable: the mouse centre may land on an
+        # overlapping panel, and some containers ignore synthetic wheel
+        # events entirely.
+        el = await page.query_selector(selector)
+        if not el:
+            msg = f"scroll selector not found: {selector}"
+            raise ValueError(msg)
+        for _ in range(steps):
+            if remaining <= 0:
+                break
+            chunk = min(remaining, random.randint(60, 160))
+            remaining -= chunk
+            await el.evaluate("(el, dy) => el.scrollBy(0, dy)", chunk * delta_sign)
+            await asyncio.sleep(random.uniform(0.02, 0.12))
+    else:
+        for _ in range(steps):
+            if remaining <= 0:
+                break
+            chunk = min(remaining, random.randint(60, 160))
+            remaining -= chunk
+            await page.mouse.wheel(0, chunk * delta_sign)
+            await asyncio.sleep(random.uniform(0.02, 0.12))
 
     # Small pause after scrolling
     await asyncio.sleep(random.uniform(0.1, 0.3))

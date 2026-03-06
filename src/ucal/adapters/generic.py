@@ -165,7 +165,12 @@ class GenericAdapter(BaseAdapter):
         )
 
     async def execute_actions(
-        self, url: str, actions: list[dict], *, platform: str | None = None
+        self,
+        url: str,
+        actions: list[dict],
+        *,
+        platform: str | None = None,
+        network_intercept_patterns: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Execute a sequence of browser actions on a page.
 
@@ -184,6 +189,9 @@ class GenericAdapter(BaseAdapter):
             platform: Optional platform identifier to use for session cookies.
                 If provided, the browser context for that platform (with its
                 saved cookies) will be used instead of the generic context.
+            network_intercept_patterns: URL substring patterns to intercept.
+                Matching XHR/fetch responses are captured and appended to
+                the results as a ``network_intercept`` entry.
 
         Returns:
             List of result dicts for each action.
@@ -191,6 +199,45 @@ class GenericAdapter(BaseAdapter):
         context_platform = platform or self.platform_name
         page = await self._bm.new_page(context_platform)
         results: list[dict[str, Any]] = []
+
+        # --- Network interception setup ---
+        intercepted: list[dict[str, Any]] = []
+        if network_intercept_patterns:
+
+            async def _on_response(response):  # noqa: ANN001
+                resp_url = response.url
+                if not any(p in resp_url for p in network_intercept_patterns):
+                    return
+                # Skip non-data content types
+                content_type = response.headers.get("content-type", "")
+                if not any(
+                    t in content_type for t in ("json", "text", "javascript", "xml")
+                ):
+                    return
+                entry: dict[str, Any] = {
+                    "url": resp_url,
+                    "status": response.status,
+                    "content_type": content_type,
+                }
+                try:
+                    body = await response.json()
+                    entry["body"] = body
+                except Exception:
+                    try:
+                        text = await response.text()
+                        # Truncate very large text responses
+                        if len(text) > 20000:
+                            text = text[:20000] + "\n... (truncated)"
+                        entry["body_text"] = text
+                    except Exception as exc:
+                        entry["error"] = f"Could not read body: {exc}"
+                intercepted.append(entry)
+
+            page.on("response", _on_response)
+            logger.info(
+                "Network interception enabled for patterns: %s",
+                network_intercept_patterns,
+            )
 
         try:
             if url:
@@ -221,7 +268,13 @@ class GenericAdapter(BaseAdapter):
                     elif action_type == "scroll":
                         direction = action.get("direction", "down")
                         amount = action.get("amount", 500)
-                        await human_scroll(page, direction=direction, amount=amount)
+                        selector = action.get("selector")
+                        await human_scroll(
+                            page,
+                            direction=direction,
+                            amount=amount,
+                            selector=selector,
+                        )
 
                     elif action_type == "screenshot":
                         save_path = action.get("path", "")
@@ -258,6 +311,17 @@ class GenericAdapter(BaseAdapter):
                     result["error"] = str(exc)
 
                 results.append(result)
+
+            # --- Append intercepted network data ---
+            if intercepted:
+                results.append(
+                    {
+                        "type": "network_intercept",
+                        "success": True,
+                        "count": len(intercepted),
+                        "responses": intercepted,
+                    }
+                )
 
         finally:
             await page.close()

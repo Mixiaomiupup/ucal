@@ -2,10 +2,10 @@
 
 > **Universal Content Access Layer** — MCP Server for unified multi-platform content access.
 
-- **Version**: 0.1.0
+- **Version**: 0.2.0
 - **Python**: >= 3.11
 - **License**: MIT
-- **Last Updated**: 2026-02-18
+- **Last Updated**: 2026-03-06
 
 ---
 
@@ -24,6 +24,7 @@ Different content platforms have different access methods (API vs. browser), aut
 - **Anti-Detection First**: Browser platforms require stealth measures to avoid detection
 - **Session Persistence**: Login once, reuse sessions across server restarts
 - **Human Behavior Simulation**: Mimic natural user interactions to reduce bot detection
+- **Network Transparency**: Intercept and expose underlying API responses for structured data access
 
 ---
 
@@ -73,7 +74,8 @@ Different content platforms have different access methods (API vs. browser), aut
 ```
 ucal/
 ├── docs/
-│   └── ARCHITECTURE.md          # 本文件
+│   ├── ARCHITECTURE.md          # 本文件
+│   └── ALTERNATIVES_COMPARISON.md  # 竞品对比测试
 ├── config/
 │   ├── platforms.yaml           # API tokens, browser settings
 │   └── sessions/                # 自动生成的 session 文件 (.gitignore)
@@ -99,9 +101,7 @@ ucal/
 │   ├── test_human_behavior.py
 │   └── test_session.py
 ├── pyproject.toml
-├── README.md
-├── QUICKSTART.md
-└── DEPLOYMENT.md
+└── README.md
 ```
 
 ---
@@ -123,6 +123,42 @@ ucal/
 **Lifespan 管理**: Server 启动时通过 `app_lifespan` 初始化所有 adapter 和 BrowserManager，关闭时统一清理。
 
 **Platform 路由**: `_get_adapter()` 根据 platform 参数从 adapter 字典中取出对应实例。`browser_action` 还支持通过 `_detect_platform_from_url()` 自动识别 URL 所属平台以复用 session。
+
+#### browser_action 支持的操作类型
+
+| Action Type | 参数 | 说明 |
+|-------------|------|------|
+| `goto` | `url` | 导航到 URL |
+| `click` | `selector` | 点击元素 |
+| `type` | `selector`, `text` | 输入文本 |
+| `scroll` | `direction`, `amount`, `selector?` | 滚动页面或指定容器 |
+| `screenshot` | `path?`, `full_page?` | 截图（可保存文件或返回 binary） |
+| `extract_text` | `selector` | 提取元素文本 |
+| `eval_js` | `expression` | 执行任意 JavaScript 并返回结果 |
+| `wait` | `selector`, `timeout?` | 等待元素出现 |
+
+#### 网络拦截 (Network Interception)
+
+`browser_action` 支持 `network_intercept_patterns` 参数，可在执行动作的同时捕获匹配的网络响应：
+
+```json
+{
+  "url": "https://example.com/page",
+  "network_intercept_patterns": ["api/data", "api/user"],
+  "actions": [
+    {"type": "click", "selector": "#load-more"},
+    {"type": "eval_js", "expression": "new Promise(r => setTimeout(r, 3000))"}
+  ]
+}
+```
+
+**工作原理**:
+1. `page.on("response")` 在 `page.goto()` 之前注册
+2. 响应 URL 包含任一 pattern 子串且 content-type 为 json/text/xml 时捕获
+3. 所有动作执行完毕后，拦截到的响应追加为 `network_intercept` 结果条目
+4. JSON 响应自动解析为结构化数据，非 JSON 返回截断文本 (≤20KB)
+
+**典型用途**: 页面通过 AJAX 加载数据时，直接获取底层 API 的结构化 JSON，无需猜测 DOM 结构。
 
 ### 4.2 Adapter Pattern (adapters/)
 
@@ -185,6 +221,7 @@ BrowserManager
 - **单实例共享**: 一个 Playwright 进程服务所有平台，减少资源开销
 - **Context 隔离**: 每个平台有独立的 BrowserContext，cookie 互不干扰
 - **自动 Session 恢复**: `get_context()` 时自动加载已保存的 storage_state
+- **过期 Cookie 清理**: `SessionManager` 加载 session 时自动丢弃过期 cookie，让服务端重新下发
 - **重试机制**: `with_retry()` 提供指数退避重试，应对浏览器操作的不稳定性
 
 ### 4.5 SessionManager (core/session.py)
@@ -243,7 +280,7 @@ await _stealth.apply_stealth_async(page)
 | 行为 | 实现 | 参数 |
 |------|------|------|
 | **鼠标移动** | 物理加速-减速模型 + ease-in-out 曲线 | 15-30 步, ±2px 抖动 |
-| **滚动** | 分块滚动, 每块 60-160px | 步间延迟 20-120ms |
+| **滚动** | 分块滚动, 每块 60-160px, 支持指定容器 | 步间延迟 20-120ms |
 | **打字** | 逐字输入, 随机延迟 | 50-180ms/字, 5% 概率长停顿 |
 | **思考延迟** | 操作间随机等待 | 0.5-2.0s |
 
@@ -253,6 +290,8 @@ await _stealth.apply_stealth_async(page)
 距离的后 30%: 减速 (a = -4~-6)
 最大速度上限: 20 px/step
 ```
+
+**容器滚动**: `human_scroll` 支持 `selector` 参数，使用 `element.scrollBy()` 直接滚动目标容器，避免 `mouse.wheel()` 被遮罩拦截或被容器忽略的问题。
 
 ---
 
@@ -297,14 +336,55 @@ LLM 调用 ucal_platform_login(platform="xhs", method="browser")
 ### 6.3 browser_action Flow
 
 ```
-LLM 调用 ucal_browser_action(url="https://zhihu.com/...", actions=[...])
+LLM 调用 ucal_browser_action(
+    url="https://example.com",
+    actions=[...],
+    network_intercept_patterns=["api/data"]   ← 可选
+)
   │
-  ├─ _detect_platform_from_url() → "zhihu"
-  ├─ GenericAdapter.execute_actions(url, actions, platform="zhihu")
-  │    ├─ BrowserManager.get_context("zhihu") → 复用知乎 session
-  │    └─ 按顺序执行 actions:
-  │         goto → click → scroll → extract_text → ...
+  ├─ _detect_platform_from_url() → 自动识别平台 (复用 session)
+  ├─ GenericAdapter.execute_actions(url, actions, ...)
+  │    │
+  │    ├─ [如有 network_intercept_patterns]
+  │    │    └─ page.on("response", _on_response)  ← 注册拦截器
+  │    │
+  │    ├─ page.goto(url)
+  │    ├─ 按顺序执行 actions:
+  │    │    goto → click → scroll → eval_js → extract_text → ...
+  │    │
+  │    └─ [如有拦截数据]
+  │         └─ 追加 {type: "network_intercept", responses: [...]}
+  │
   └─ 返回 [{type, success, ...}, ...]
+```
+
+### 6.4 XHS Read Flow (含评论提取)
+
+```
+LLM 调用 ucal_platform_read(
+    platform="xhs",
+    url="https://www.xiaohongshu.com/explore/...",
+    comment_limit=10,      ← 最大顶层评论数 (默认 10)
+    expand_replies=2        ← 展开子评论深度 (默认 1, 最大 3)
+)
+  │
+  ├─ XHSAdapter.read(url, comment_limit=10, expand_replies=2)
+  │    ├─ 导航到笔记页
+  │    ├─ 等待评论加载 (最多 10s)
+  │    ├─ 提取正文: #detail-desc, .note-text
+  │    ├─ 提取标签: 正文中 #tag + DOM 中 a[href*=keyword]
+  │    ├─ 提取互动: likes, comments, collects
+  │    ├─ 提取评论区:
+  │    │    ├─ 遍历 .parent-comment (最多 comment_limit 条)
+  │    │    ├─ 每条主评论:
+  │    │    │    ├─ 提取: 用户名, 评论文本, 日期
+  │    │    │    ├─ 点击 "展开更多" (最多 expand_replies 次)
+  │    │    │    ├─ 提取子评论: 用户名, 文本, 图片
+  │    │    │    └─ 记录热门讨论 (≥3 条子评论或有展开按钮)
+  │    │    └─ 标注未展开的折叠回复
+  │    └─ 返回 ContentResult (Markdown + extra{tags, hot_threads})
+  │
+  └─ 返回 JSON
 ```
 
 ---
@@ -317,11 +397,25 @@ LLM 调用 ucal_browser_action(url="https://zhihu.com/...", actions=[...])
 | **Search** | Yes | Yes (channel_id:query) | Yes | Yes | No |
 | **Read** | Yes | Yes | Yes | Yes | Yes |
 | **Extract** | Yes | Yes | Yes | Yes | Yes |
+| **Comment Extraction** | N/A | N/A | Yes (含子评论) | No | N/A |
 | **browser_action** | N/A | N/A | Yes | Yes | Yes |
+| **Network Interception** | N/A | N/A | Yes | Yes | Yes |
 | **Session Persist** | N/A | N/A | Yes | Yes | N/A |
 | **Anti-Detection** | N/A | N/A | Full | Full | Basic |
 
-### 7.1 Platform Content Characteristics
+### 7.1 XHS 评论提取能力
+
+小红书 `platform_read` 支持完整的评论区提取：
+
+| 能力 | 状态 | 参数 |
+|------|:----:|------|
+| 顶层评论 | 已支持 | `comment_limit` (默认 10, 上限 50) |
+| 子评论/回复 | 已支持 | `expand_replies` (默认 1, 最大 3) |
+| 评论中的图片 | 已支持 | 自动转 markdown `![img](url)` |
+| 热门讨论标记 | 已支持 | `extra.hot_threads` 返回 |
+| 未展开回复提示 | 已支持 | 输出中标注折叠数 |
+
+### 7.2 Platform Content Characteristics
 
 不同平台的内容形态有本质差异，直接影响 adapter 的提取策略：
 
@@ -329,30 +423,20 @@ LLM 调用 ucal_browser_action(url="https://zhihu.com/...", actions=[...])
 |------|:------------:|:------------:|:---------:|
 | **主要内容载体** | 图片/视频 | 文字 | 短文字 |
 | **正文文字** | 少，通常是图片说明 | 多，完整长文 | 280字以内 |
-| **图片中的关键信息** | 大量（攻略、教程、菜单等核心内容在图中） | 少（配图为辅） | 少 |
-| **评论区价值** | 高（补充信息、避坑提醒、真实反馈） | 中（讨论为主） | 中 |
+| **图片中的关键信息** | 大量（攻略、教程、菜单等） | 少（配图为辅） | 少 |
+| **评论区价值** | 高（补充信息、避坑提醒） | 中（讨论为主） | 中 |
+| **评论提取** | 已支持 | 未支持 | N/A |
 | **OCR 需求** | 强烈 | 低 | 低 |
-| **适合 read 直接提取** | 部分（只能拿到文字描述） | 完整 | 完整 |
 
-**小红书的特殊挑战**:
-
-小红书是一个**图片优先**的平台。很多笔记的核心内容（如旅行攻略的行程安排、美食推荐的店铺信息、穿搭教程的细节）都在图片中，而文字正文只是简短的引导或总结。当前 `platform_read` 只能提取文字内容，**图片中的信息会丢失**。
-
-此外，小红书的**评论区**往往包含大量有价值的补充信息：
-- 其他用户的真实体验和避坑建议
-- 博主对具体问题的回复（如"这家店几点开门？""用的什么色号？"）
-- 价格、地址等实用信息的更新
-
-**对比知乎**: 知乎的核心内容在回答正文中，以长文字为主，`platform_read` 可以提取到几乎全部有价值的内容。评论区主要是讨论和追问，信息密度相对低。
-
-**当前状态与改进方向**:
+### 7.3 当前限制与改进方向
 
 | 能力 | 当前状态 | 改进方向 |
 |------|----------|----------|
 | 小红书图片提取 | 不支持 | 下载图片 + OCR (Tesseract/云端 API) |
-| 小红书评论区 | 不支持 | adapter 增加 `read_comments()` 方法 |
+| 小红书评论区 | **已支持** | 提高稳定性、支持更深层展开 |
 | 知乎评论区 | 不支持 | 优先级低，正文已包含主要内容 |
 | 图片描述/Alt text | 不支持 | 提取 `<img>` 的 alt 属性作为补充 |
+| 小红书视频内容 | 不支持 | 需结合语音转文字 |
 
 ---
 
@@ -440,11 +524,8 @@ Browser 适配器存在的原因：
 - 安全性：一个平台的 session 泄露不影响其他平台
 - 灵活性：可以独立管理每个平台的 session 生命周期
 
-### Q: 为什么小红书和知乎用同一套 BaseAdapter 接口，但内容特征差异很大？
-当前 BaseAdapter 的 4 个方法（login/search/read/extract）是最小公约数抽象，足以覆盖"搜索-阅读-提取"的基本流程。但小红书作为图片优先平台，其核心内容在图片和评论区中，纯文字提取只能拿到部分信息。未来可能需要扩展接口：
-- `read_comments(url, limit)` — 提取评论区
-- `download_images(url)` — 下载笔记图片
-- 结合 OCR 能力从图片中提取文字信息
+### Q: 为什么需要 network_intercept_patterns？
+很多现代 Web 应用通过 AJAX/fetch 异步加载数据，页面渲染后的 DOM 可能不包含完整数据，或数据散布在多个元素中难以提取。网络拦截可以直接捕获底层 API 响应的结构化 JSON，绕过 DOM 解析的复杂性。典型场景：电商平台的商品详情、社交平台的评论分页、数据面板的图表数据。
 
 ---
 
@@ -453,17 +534,19 @@ Browser 适配器存在的原因：
 ### 平台通用
 1. **反检测不是万能的** — 高频访问仍然可能触发验证码或封禁
 2. **headless 模式下登录受限** — 扫码登录必须 `headless=false`
-3. **Generic adapter 无 search** — 通用适配器只支持 read 和 extract，不支持搜索
+3. **Generic adapter 无 search** — 通用适配器只支持 read、extract 和 browser_action
 
 ### 小红书 (XHS)
 4. **图片内容无法提取** — 小红书核心内容大量在图片中（攻略、教程、菜单等），当前只能提取文字描述，图片中的信息完全丢失。这是当前最大的能力缺口
-5. **评论区无法提取** — 小红书评论区包含大量有价值信息（避坑提醒、博主回复、价格更新等），当前不支持提取
-6. **搜索结果质量不稳定** — 部分笔记标题和 URL 提取不到，视频类笔记尤甚
-7. **视频内容不支持** — 无法提取视频中的内容
+5. **搜索结果质量不稳定** — 部分笔记标题和 URL 提取不到，视频类笔记尤甚
+6. **视频内容不支持** — 无法提取视频中的内容
 
 ### 知乎 (Zhihu)
-8. **懒加载问题** — 长页面需要多次滚动才能加载所有回答，browser_action 滚动时页面可能丢失 DOM 状态
-9. **长回答折叠** — 默认只展示部分内容，需要点击"展开"或"阅读全文"才能获取完整回答
+7. **懒加载问题** — 长页面需要多次滚动才能加载所有回答
+8. **长回答折叠** — 默认只展示部分内容，需要点击"展开"才能获取完整回答
+
+### 网络拦截
+9. **需手动等待** — 拦截的 AJAX 响应需在动作序列中添加足够的等待时间（如 `eval_js` 延时），否则可能在响应返回前就收集结果
 
 ---
 
