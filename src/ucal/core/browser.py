@@ -6,8 +6,11 @@ and graceful shutdown.  Provides a retry wrapper for flaky browser operations.
 
 from __future__ import annotations
 
+import atexit
 import asyncio
 import logging
+import os
+import signal
 from typing import Any
 
 from playwright.async_api import (
@@ -26,6 +29,24 @@ from ucal.core.anti_detect import (
 from ucal.core.session import SessionManager
 
 logger = logging.getLogger(__name__)
+
+# Track all browser PIDs globally so atexit/signal handlers can kill them
+# even when the async event loop is gone.
+_browser_pids: set[int] = set()
+
+
+def _kill_browser_pids() -> None:
+    """Kill any tracked browser processes on interpreter exit."""
+    for pid in list(_browser_pids):
+        try:
+            os.kill(pid, signal.SIGTERM)
+            logger.info("atexit: sent SIGTERM to browser PID %d", pid)
+        except OSError:
+            pass
+    _browser_pids.clear()
+
+
+atexit.register(_kill_browser_pids)
 
 
 class BrowserManager:
@@ -60,7 +81,15 @@ class BrowserManager:
                 "--no-first-run",
             ],
         )
-        logger.info("Browser launched (headless=%s)", self.headless)
+        # Track the browser process PID for atexit cleanup
+        try:
+            pid = self._browser.process.pid  # type: ignore[union-attr]
+            _browser_pids.add(pid)
+            logger.info(
+                "Browser launched (headless=%s, pid=%d)", self.headless, pid
+            )
+        except Exception:
+            logger.info("Browser launched (headless=%s)", self.headless)
 
     async def get_context(
         self,
@@ -144,6 +173,11 @@ class BrowserManager:
         for name in list(self._contexts):
             await self.close_context(name)
         if self._browser:
+            try:
+                pid = self._browser.process.pid  # type: ignore[union-attr]
+                _browser_pids.discard(pid)
+            except Exception:
+                pass
             await self._browser.close()
             self._browser = None
         if self._playwright:

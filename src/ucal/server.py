@@ -9,9 +9,11 @@ Playwright browser automation with anti-detection.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import signal
 from contextlib import asynccontextmanager
 from enum import Enum
 from pathlib import Path
@@ -78,6 +80,18 @@ async def app_lifespan(server: FastMCP):
     adapters["xhs"] = XHSAdapter(browser_mgr)
     adapters["zhihu"] = ZhihuAdapter(browser_mgr)
     adapters["generic"] = GenericAdapter(browser_mgr)
+
+    # Register signal handlers so SIGTERM/SIGINT trigger browser cleanup
+    # instead of leaving orphaned Chrome processes.
+    loop = asyncio.get_running_loop()
+    shutdown_event = asyncio.Event()
+
+    def _signal_handler(sig: int) -> None:
+        logger.info("Received signal %s, initiating shutdown", sig)
+        shutdown_event.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, _signal_handler, sig)
 
     yield {"browser_manager": browser_mgr, "adapters": adapters}
 
@@ -512,6 +526,8 @@ async def ucal_browser_action(params: BrowserActionInput, ctx: Context) -> str:
     - goto: {"type": "goto", "url": "https://..."}
     - click: {"type": "click", "selector": "button.submit"}
     - type: {"type": "type", "selector": "input.search", "text": "query"}
+    - keyboard_type: {"type": "keyboard_type", "selector": "textarea", "text": "query"}
+      Like type but uses keyboard events (works with React controlled components)
     - scroll: {"type": "scroll", "direction": "down", "amount": 500,
               "selector": ".content-area"}
     - screenshot: {"type": "screenshot"}
