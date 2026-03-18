@@ -396,6 +396,8 @@ class TwitterBrowserAdapter(BaseAdapter):
                 lines.append(t["text"])
                 if t.get("metrics"):
                     lines.append(f"_{t['metrics']}_")
+                if t.get("url"):
+                    lines.append(f"[View tweet]({t['url']})")
                 lines.append("")
 
             return ContentResult(
@@ -498,10 +500,13 @@ class TwitterBrowserAdapter(BaseAdapter):
                 lines.append("")
                 lines.append("## Replies")
                 for r in replies:
-                    lines.append(
+                    reply_line = (
                         f"- **{r.get('author', '')}**: {r['text']}"
                         + (f" ({r['time']})" if r.get("time") else "")
                     )
+                    if r.get("url"):
+                        reply_line += f" [↗]({r['url']})"
+                    lines.append(reply_line)
 
             return ContentResult(
                 title=f"Tweet by {main_tweet.get('author', '')}",
@@ -569,13 +574,10 @@ class TwitterBrowserAdapter(BaseAdapter):
                     seen_texts.add(info["text"])
                     new_found = True
 
-                    # Try to extract tweet URL from time element's parent link
-                    tweet_url = await self._extract_tweet_url(article)
-
                     results.append(
                         SearchResult(
                             title=info["text"][:80],
-                            url=tweet_url or X_BASE,
+                            url=info.get("url") or X_BASE,
                             summary=info["text"],
                             author=info.get("author", ""),
                             platform=self.platform_name,
@@ -687,29 +689,31 @@ class TwitterBrowserAdapter(BaseAdapter):
                     pass
             metrics = " · ".join(metrics_parts)
 
+            # Tweet permalink URL
+            tweet_url = ""
+            try:
+                time_link = await article.query_selector("time")
+                if time_link:
+                    parent = await time_link.evaluate_handle(
+                        "el => el.closest('a')"
+                    )
+                    if parent:
+                        href = await parent.get_property("href")
+                        href_str = await href.json_value()
+                        if href_str and "/status/" in str(href_str):
+                            tweet_url = str(href_str)
+            except Exception:
+                pass
+
             return {
                 "text": text,
                 "author": author,
                 "time": time_str,
                 "metrics": metrics,
+                "url": tweet_url,
             }
         except Exception:
             return None
-
-    async def _extract_tweet_url(self, article) -> str:  # noqa: ANN001
-        """Try to extract the permalink URL from a tweet article."""
-        try:
-            time_el = await article.query_selector("time")
-            if time_el:
-                parent = await time_el.evaluate_handle("el => el.closest('a')")
-                if parent:
-                    href = await parent.get_property("href")
-                    href_str = await href.json_value()
-                    if href_str and "/status/" in str(href_str):
-                        return str(href_str)
-        except Exception:
-            pass
-        return ""
 
     @staticmethod
     def _username_from_url(url: str) -> str:

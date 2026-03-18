@@ -19,7 +19,7 @@ from ucal.adapters.base import (
     SearchResult,
 )
 from ucal.core.browser import BrowserManager
-from ucal.utils.human_behavior import human_scroll, random_delay
+from ucal.utils.human_behavior import human_scroll, human_type, random_delay
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +263,12 @@ class GenericAdapter(BaseAdapter):
 
                     elif action_type == "type":
                         await page.fill(action["selector"], action.get("text", ""))
+                        result["selector"] = action["selector"]
+
+                    elif action_type == "keyboard_type":
+                        await human_type(
+                            page, action["selector"], action.get("text", "")
+                        )
                         result["selector"] = action["selector"]
 
                     elif action_type == "scroll":
