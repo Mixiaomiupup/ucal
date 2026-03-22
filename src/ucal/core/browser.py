@@ -67,29 +67,36 @@ class BrowserManager:
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._contexts: dict[str, BrowserContext] = {}
+        self._start_lock = asyncio.Lock()
 
     async def start(self) -> None:
-        """Launch the Playwright browser."""
-        if self._browser:
-            return
-        self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            headless=self.headless,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--disable-infobars",
-                "--no-first-run",
-            ],
-        )
-        # Track the browser process PID for atexit cleanup
-        try:
-            pid = self._browser.process.pid  # type: ignore[union-attr]
-            _browser_pids.add(pid)
-            logger.info(
-                "Browser launched (headless=%s, pid=%d)", self.headless, pid
+        """Launch the Playwright browser.
+
+        Uses a lock to prevent concurrent calls from launching multiple
+        browser instances (e.g. when parallel MCP tool calls all invoke
+        start() simultaneously).
+        """
+        async with self._start_lock:
+            if self._browser:
+                return
+            self._playwright = await async_playwright().start()
+            self._browser = await self._playwright.chromium.launch(
+                headless=self.headless,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-infobars",
+                    "--no-first-run",
+                ],
             )
-        except Exception:
-            logger.info("Browser launched (headless=%s)", self.headless)
+            # Track the browser process PID for atexit cleanup
+            try:
+                pid = self._browser.process.pid  # type: ignore[union-attr]
+                _browser_pids.add(pid)
+                logger.info(
+                    "Browser launched (headless=%s, pid=%d)", self.headless, pid
+                )
+            except Exception:
+                logger.info("Browser launched (headless=%s)", self.headless)
 
     async def get_context(
         self,
